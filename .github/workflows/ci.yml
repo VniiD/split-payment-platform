@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dotnet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Build
+        run: dotnet build SplitPayment.sln --configuration Release
+      - name: Test
+        run: dotnet test SplitPayment.sln --configuration Release --no-build
+      - name: Audit NuGet dependencies
+        run: dotnet list SplitPayment.sln package --vulnerable --include-transitive
+
+  compose-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create ephemeral development credentials
+        shell: bash
+        run: |
+          {
+            printf 'MSSQL_SA_PASSWORD=%s\n' "$(openssl rand -hex 24)Aa1!"
+            printf 'SPLITPAYMENT_DB_PASSWORD=%s\n' "$(openssl rand -hex 24)Bb2!"
+            printf 'MONGODB_ROOT_USERNAME=ci_mongo_root\n'
+            printf 'MONGODB_ROOT_PASSWORD=%s\n' "$(openssl rand -hex 24)Cc3!"
+            printf 'MONGODB_APP_USERNAME=ci_splitpayment_app\n'
+            printf 'MONGODB_APP_PASSWORD=%s\n' "$(openssl rand -hex 32)"
+            printf 'INVOICE_API_KEY=%s\n' "$(openssl rand -hex 32)"
+          } > .env
+      - name: Validate Compose model
+        run: docker compose config --quiet
+      - name: Start full stack
+        run: |
+          docker compose up --build --detach
+          docker compose wait kafka-init sqlserver-init
+      - name: Verify authenticated API and event processing
+        shell: bash
+        run: |
+          mongo_user="$(sed -n 's/^MONGODB_ROOT_USERNAME=//p' .env)"
+          mongo_password="$(sed -n 's/^MONGODB_ROOT_PASSWORD=//p' .env)"
+          mssql_password="$(sed -n 's/^MSSQL_SA_PASSWORD=//p' .env)"
+          api_key="$(sed -n 's/^INVOICE_API_KEY=//p' .env)"
+          idempotency_key="ci-$(openssl rand -hex 16)"
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://localhost:5080/health/ready >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          response="$(curl --fail --silent --show-error \
+            -H "X-API-Key: $api_key" \
+            -H "Idempotency-Key: $idempotency_key" \
+            -H 'Content-Type: application/json' \
+            -d '{"merchantTaxId":"11.222.333/0001-81","customerTaxId":"529.982.247-25","grossAmount":1000.00,"ibsRate":17.70,"cbsRate":8.80,"isSimplifiedProcedure":false}' \
+            http://localhost:5080/api/v1/invoices)"
+          invoice_id="$(printf '%s' "$response" | jq -r '.invoiceId')"
+          test -n "$invoice_id"
+          repeated_response="$(curl --fail --silent --show-error \
+            -H "X-API-Key: $api_key" \
+            -H "Idempotency-Key: $idempotency_key" \
+            -H 'Content-Type: application/json' \
+            -d '{"merchantTaxId":"11.222.333/0001-81","customerTaxId":"529.982.247-25","grossAmount":1000,"ibsRate":17.7,"cbsRate":8.8,"isSimplifiedProcedure":false}' \
+            http://localhost:5080/api/v1/invoices)"
+          repeated_invoice_id="$(printf '%s' "$repeated_response" | jq -r '.invoiceId')"
+          test "$invoice_id" = "$repeated_invoice_id"
+          conflict_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            -H "X-API-Key: $api_key" \
+            -H "Idempotency-Key: $idempotency_key" \
+            -H 'Content-Type: application/json' \
+            -d '{"merchantTaxId":"11.222.333/0001-81","customerTaxId":"529.982.247-25","grossAmount":999,"ibsRate":17.7,"cbsRate":8.8,"isSimplifiedProcedure":false}' \
+            http://localhost:5080/api/v1/invoices)"
+          test "$conflict_status" = "409"
+          for attempt in $(seq 1 60); do
+            mongo_count="$(docker compose exec -T mongodb mongosh --quiet \
+              --username "$mongo_user" --password "$mongo_password" \
+              --authenticationDatabase admin SplitPaymentDb \
+              --eval "db.Transactions.countDocuments({invoiceId: '$invoice_id'})")"
+            sql_count="$(docker compose exec -T sqlserver /opt/mssql-tools18/bin/sqlcmd \
+              -S localhost -U sa -P "$mssql_password" -C -h -1 -W \
+              -Q "SET NOCOUNT ON; SELECT COUNT(*) FROM SplitPayment.dbo.CgibsTaxLedger WHERE InvoiceId = '$invoice_id'")"
+            if [[ "$mongo_count" == "1" && "$sql_count" == "1" ]]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Invoice was not persisted to both MongoDB and SQL Server." >&2
+          docker compose logs
+          exit 1
+      - name: Stop stack
+        if: always()
+        run: docker compose down --volumes

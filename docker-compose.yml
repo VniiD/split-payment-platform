@@ -1,0 +1,172 @@
+services:
+  kafka:
+    image: apache/kafka:3.9.0
+    hostname: kafka
+    ports:
+      - "127.0.0.1:29092:29092"
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:9092,EXTERNAL://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NUM_PARTITIONS: 3
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  kafka-init:
+    image: apache/kafka:3.9.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - >-
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic invoice-created-topic --partitions 3 --replication-factor 1 &&
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic invoice-created-engine-dlq --partitions 3 --replication-factor 1 &&
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic invoice-created-cgibs-dlq --partitions 3 --replication-factor 1
+    restart: "no"
+
+  mongodb:
+    image: mongo:7.0
+    ports:
+      - "127.0.0.1:27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USERNAME:?Set MONGODB_ROOT_USERNAME in .env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD:?Set MONGODB_ROOT_PASSWORD in .env}
+      MONGODB_APP_USERNAME: ${MONGODB_APP_USERNAME:?Set MONGODB_APP_USERNAME in .env}
+      MONGODB_APP_PASSWORD: ${MONGODB_APP_PASSWORD:?Set MONGODB_APP_PASSWORD in .env}
+      MONGO_INITDB_DATABASE: SplitPaymentDb
+    volumes:
+      - mongodb-data:/data/db
+      - ./docker/mongodb/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --username \"$$MONGO_INITDB_ROOT_USERNAME\" --password \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --eval \"db.adminCommand('ping').ok\" >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    ports:
+      - "127.0.0.1:1433:1433"
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env}
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q \"SELECT 1\" >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  sqlserver-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - >-
+        /opt/mssql-tools18/bin/sqlcmd -b -S sqlserver -U sa -P "$$MSSQL_SA_PASSWORD" -C
+        -v AppPassword="$$SPLITPAYMENT_DB_PASSWORD" -i /scripts/01-create-ledger.sql
+    environment:
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?Set MSSQL_SA_PASSWORD in .env}
+      SPLITPAYMENT_DB_PASSWORD: ${SPLITPAYMENT_DB_PASSWORD:?Set SPLITPAYMENT_DB_PASSWORD in .env}
+    volumes:
+      - ./docker/sqlserver/init:/scripts:ro
+    restart: "no"
+
+  invoice-api:
+    build:
+      context: .
+      dockerfile: src/SplitPayment.InvoiceApi/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      Security__ApiKey: ${INVOICE_API_KEY:?Set INVOICE_API_KEY in .env}
+      Kafka__BootstrapServers: kafka:9092
+      Kafka__InvoiceTopic: invoice-created-topic
+      Mongo__ConnectionString: mongodb://${MONGODB_APP_USERNAME}:${MONGODB_APP_PASSWORD}@mongodb:27017/SplitPaymentDb?authSource=SplitPaymentDb
+      Mongo__Database: SplitPaymentDb
+      Outbox__MaxAttempts: 12
+    ports:
+      - "127.0.0.1:5080:8080"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  engine-worker:
+    build:
+      context: .
+      dockerfile: src/SplitPayment.EngineWorker/Dockerfile
+    environment:
+      DOTNET_ENVIRONMENT: Production
+      Kafka__BootstrapServers: kafka:9092
+      Kafka__InvoiceTopic: invoice-created-topic
+      Kafka__ConsumerGroup: split-payment-engine-group
+      Kafka__DeadLetterTopic: invoice-created-engine-dlq
+      Mongo__ConnectionString: mongodb://${MONGODB_APP_USERNAME}:${MONGODB_APP_PASSWORD}@mongodb:27017/SplitPaymentDb?authSource=SplitPaymentDb
+      Mongo__Database: SplitPaymentDb
+      Processing__MaxAttempts: 3
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      mongodb:
+        condition: service_healthy
+    restart: unless-stopped
+
+  cgibs-gateway:
+    build:
+      context: .
+      dockerfile: src/SplitPayment.CgibsGateway/Dockerfile
+    environment:
+      DOTNET_ENVIRONMENT: Production
+      Kafka__BootstrapServers: kafka:9092
+      Kafka__InvoiceTopic: invoice-created-topic
+      Kafka__ConsumerGroup: cgibs-gateway-group
+      Kafka__DeadLetterTopic: invoice-created-cgibs-dlq
+      Mongo__ConnectionString: mongodb://${MONGODB_APP_USERNAME}:${MONGODB_APP_PASSWORD}@mongodb:27017/SplitPaymentDb?authSource=SplitPaymentDb
+      Mongo__Database: SplitPaymentDb
+      Sql__ConnectionString: Server=sqlserver,1433;Database=SplitPayment;User Id=splitpayment_app;Password=${SPLITPAYMENT_DB_PASSWORD};Encrypt=True;TrustServerCertificate=True
+      Processing__MaxAttempts: 3
+      Reconciliation__IntervalSeconds: 300
+      Reconciliation__StabilityWindowSeconds: 300
+      Reconciliation__BatchSize: 500
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      mongodb:
+        condition: service_healthy
+      sqlserver-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  mongodb-data:
+  sqlserver-data:
