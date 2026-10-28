@@ -37,13 +37,13 @@ jobs:
             printf 'MONGODB_APP_USERNAME=ci_splitpayment_app\n'
             printf 'MONGODB_APP_PASSWORD=%s\n' "$(openssl rand -hex 32)"
             printf 'INVOICE_API_KEY=%s\n' "$(openssl rand -hex 32)"
+            printf 'RECONCILIATION_INTERVAL_SECONDS=30\n'
+            printf 'RECONCILIATION_STABILITY_WINDOW_SECONDS=5\n'
           } > .env
       - name: Validate Compose model
         run: docker compose config --quiet
       - name: Start full stack
-        run: |
-          docker compose up --build --detach
-          docker compose wait kafka-init sqlserver-init
+        run: docker compose up --build --detach
       - name: Verify authenticated API and event processing
         shell: bash
         run: |
@@ -54,10 +54,17 @@ jobs:
           idempotency_key="ci-$(openssl rand -hex 16)"
           for attempt in $(seq 1 60); do
             if curl --fail --silent http://localhost:5080/health/ready >/dev/null; then
+              api_ready=true
               break
             fi
             sleep 2
           done
+          if [[ "${api_ready:-false}" != true ]]; then
+            echo "Invoice API did not become ready in time." >&2
+            docker compose ps --all
+            docker compose logs
+            exit 1
+          fi
           response="$(curl --fail --silent --show-error \
             -H "X-API-Key: $api_key" \
             -H "Idempotency-Key: $idempotency_key" \
@@ -90,13 +97,26 @@ jobs:
               -S localhost -U sa -P "$mssql_password" -C -h -1 -W \
               -Q "SET NOCOUNT ON; SELECT COUNT(*) FROM SplitPayment.dbo.CgibsTaxLedger WHERE InvoiceId = '$invoice_id'")"
             if [[ "$mongo_count" == "1" && "$sql_count" == "1" ]]; then
-              exit 0
+              break
             fi
             sleep 2
           done
-          echo "Invoice was not persisted to both MongoDB and SQL Server." >&2
-          docker compose logs
-          exit 1
+          if [[ "$mongo_count" != "1" || "$sql_count" != "1" ]]; then
+            echo "Invoice was not persisted to both MongoDB and SQL Server." >&2
+            docker compose logs
+            exit 1
+          fi
+          status_response="$(curl --fail --silent --show-error \
+            -H "X-API-Key: $api_key" \
+            "http://localhost:5080/api/v1/invoices/$invoice_id")"
+          test "$(printf '%s' "$status_response" | jq -r '.status')" = "Published"
+          sleep 35
+          reconciliation_log="$(docker compose logs --since 20s cgibs-gateway 2>&1 | grep 'Cross-store reconciliation completed' | tail -n 1 || true)"
+          if [[ -z "$reconciliation_log" ]] || ! printf '%s\n' "$reconciliation_log" | grep -q 'discrepancies: 0'; then
+            echo "Cross-store reconciliation did not complete cleanly." >&2
+            docker compose logs
+            exit 1
+          fi
       - name: Stop stack
         if: always()
         run: docker compose down --volumes

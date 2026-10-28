@@ -80,9 +80,9 @@ public sealed class ReconciliationWorker : BackgroundService
             }
 
             lastInvoiceId = ledgerRows[^1].InvoiceId;
-            var mongoFilter = Builders<ReconciliationDocument>.Filter.And(
-                Builders<ReconciliationDocument>.Filter.Lt(document => document.ProcessedAt, cutoff),
-                Builders<ReconciliationDocument>.Filter.In(document => document.InvoiceId, ledgerRows.Select(row => row.InvoiceId)));
+            var mongoFilter = Builders<ReconciliationDocument>.Filter.In(
+                document => document.InvoiceId,
+                ledgerRows.Select(row => row.InvoiceId));
             var mongoRows = await _transactions.Find(mongoFilter)
                 .ToListAsync(cancellationToken);
             var mongoById = mongoRows.ToDictionary(row => row.InvoiceId);

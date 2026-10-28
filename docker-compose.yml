@@ -155,8 +155,8 @@ services:
       Mongo__Database: SplitPaymentDb
       Sql__ConnectionString: Server=sqlserver,1433;Database=SplitPayment;User Id=splitpayment_app;Password=${SPLITPAYMENT_DB_PASSWORD};Encrypt=True;TrustServerCertificate=True
       Processing__MaxAttempts: 3
-      Reconciliation__IntervalSeconds: 300
-      Reconciliation__StabilityWindowSeconds: 300
+      Reconciliation__IntervalSeconds: ${RECONCILIATION_INTERVAL_SECONDS:-300}
+      Reconciliation__StabilityWindowSeconds: ${RECONCILIATION_STABILITY_WINDOW_SECONDS:-300}
       Reconciliation__BatchSize: 500
     depends_on:
       kafka-init:
