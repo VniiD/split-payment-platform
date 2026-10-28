@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\SplitPayment.InvoiceApi\SplitPayment.InvoiceApi.csproj" />
+    <ProjectReference Include="..\..\src\SplitPayment.CgibsGateway\SplitPayment.CgibsGateway.csproj" />
     <ProjectReference Include="..\..\src\SplitPayment.Domain\SplitPayment.Domain.csproj" />
   </ItemGroup>
 

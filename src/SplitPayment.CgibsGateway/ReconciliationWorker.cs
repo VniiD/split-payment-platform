@@ -241,6 +241,8 @@ public sealed class ReconciliationDocument
     [BsonElement("invoiceId")]
     [BsonRepresentation(BsonType.String)]
     public Guid InvoiceId { get; set; }
+    [BsonElement("merchantTaxId")]
+    public string MerchantTaxId { get; set; } = string.Empty;
     [BsonElement("grossValue")]
     [BsonRepresentation(BsonType.Decimal128)]
     public decimal GrossValue { get; set; }
