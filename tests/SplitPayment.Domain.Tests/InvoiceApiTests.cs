@@ -68,8 +68,134 @@ public sealed class InvoiceApiTests : IClassFixture<InvoiceApiApplicationFactory
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var json = await response.Content.ReadAsStringAsync();
         Assert.Contains("/api/v1/invoices", json, StringComparison.Ordinal);
+        Assert.Contains("/api/v2/demo/tax-calculations", json, StringComparison.Ordinal);
         Assert.Contains("X-API-Key", json, StringComparison.Ordinal);
         Assert.Contains("Idempotency-Key", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DemoTaxCalculation_ReturnsInformationalValuesAndDoesNotCollectTax()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v2/demo/tax-calculations")
+        {
+            Content = JsonContent.Create(new
+            {
+                taxBase = 1000m,
+                referenceDate = new DateOnly(2026, 10, 28)
+            })
+        };
+        request.Headers.Add("X-API-Key", InvoiceApiApplicationFactory.TestApiKey);
+
+        using var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await response.Content.ReadFromJsonAsync<TaxSimulationResponse>();
+        Assert.NotNull(result);
+        Assert.Equal("BR-RTC-2026-TEST-1", result.RuleSetId);
+        Assert.Equal("InformationalTestOnly", result.Status);
+        Assert.True(result.TaxBaseIsSynthetic);
+        Assert.Equal(1m, result.IbsInformationalAmount);
+        Assert.Equal(9m, result.CbsInformationalAmount);
+        Assert.False(result.FiscalClassificationValidated);
+        Assert.False(result.PaymentOrTaxCollectionExecuted);
+    }
+
+    [Fact]
+    public async Task DemoTaxCalculation_RequiresApiKey()
+    {
+        using var response = await _client.PostAsJsonAsync(
+            "/api/v2/demo/tax-calculations",
+            new
+            {
+                taxBase = 1000m,
+                referenceDate = new DateOnly(2026, 10, 28)
+            });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DemoTaxCalculation_RejectsDateOutsideRuleSetPeriod()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v2/demo/tax-calculations")
+        {
+            Content = JsonContent.Create(new
+            {
+                taxBase = 1000m,
+                referenceDate = new DateOnly(2027, 1, 1)
+            })
+        };
+        request.Headers.Add("X-API-Key", InvoiceApiApplicationFactory.TestApiKey);
+
+        using var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DemoCheckout_RequiresApiKey()
+    {
+        using var response = await _client.PostAsJsonAsync(
+            "/api/v2/demo/checkouts",
+            new { productId = "demo-item-001", quantity = 1 });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DemoCheckout_StaysDisabledWithoutExplicitSandboxConfiguration()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v2/demo/checkouts")
+        {
+            Content = JsonContent.Create(new { productId = "demo-item-001", quantity = 1 })
+        };
+        request.Headers.Add("X-API-Key", InvoiceApiApplicationFactory.TestApiKey);
+        request.Headers.Add("Idempotency-Key", "demo-checkout-0001");
+
+        using var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DemoProducts_ReturnFixedSyntheticCatalog()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v2/demo/products");
+        request.Headers.Add("X-API-Key", InvoiceApiApplicationFactory.TestApiKey);
+
+        using var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var products = await response.Content.ReadAsStringAsync();
+        Assert.Contains("demo-item-001", products, StringComparison.Ordinal);
+        Assert.Contains("49.90", products, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DemoTestProfiles_AreHiddenOutsideLocalMockMode()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v2/demo/test-profiles");
+        request.Headers.Add("X-API-Key", InvoiceApiApplicationFactory.TestApiKey);
+
+        using var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task MockPayment_CannotBeUsedOutsideLocalMockMode()
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/v2/demo/checkouts/{Guid.NewGuid():D}/mock-payment")
+        {
+            Content = JsonContent.Create(new { status = "approved" })
+        };
+        request.Headers.Add("X-API-Key", InvoiceApiApplicationFactory.TestApiKey);
+
+        using var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     private static readonly object ValidInvoice = new
@@ -81,6 +207,15 @@ public sealed class InvoiceApiTests : IClassFixture<InvoiceApiApplicationFactory
         cbsRate = 8.8m,
         isSimplifiedProcedure = false
     };
+
+    private sealed record TaxSimulationResponse(
+        string RuleSetId,
+        string Status,
+        bool TaxBaseIsSynthetic,
+        decimal IbsInformationalAmount,
+        decimal CbsInformationalAmount,
+        bool FiscalClassificationValidated,
+        bool PaymentOrTaxCollectionExecuted);
 }
 
 public sealed class InvoiceApiApplicationFactory : WebApplicationFactory<Program>

@@ -1,6 +1,40 @@
-@SplitPayment.InvoiceApi_HostAddress = http://localhost:5203
+@SplitPayment.InvoiceApi_HostAddress = http://localhost:5080
+@SplitPayment.InvoiceApi_Key = REPLACE_WITH_LOCAL_API_KEY
 
-GET {{SplitPayment.InvoiceApi_HostAddress}}/weatherforecast/
+### Health
+GET {{SplitPayment.InvoiceApi_HostAddress}}/health/live
 Accept: application/json
+
+###
+
+### List synthetic checkout products
+GET {{SplitPayment.InvoiceApi_HostAddress}}/api/v2/demo/products
+X-API-Key: {{SplitPayment.InvoiceApi_Key}}
+Accept: application/json
+
+###
+
+### Create a sandbox checkout (requires Mercado Pago TEST credentials and an HTTPS webhook tunnel)
+POST {{SplitPayment.InvoiceApi_HostAddress}}/api/v2/demo/checkouts
+X-API-Key: {{SplitPayment.InvoiceApi_Key}}
+Idempotency-Key: demo-checkout-00000001
+Content-Type: application/json
+
+{
+  "productId": "demo-item-001",
+  "quantity": 1
+}
+
+###
+
+### Informational IBS/CBS test calculation (synthetic scenario only)
+POST {{SplitPayment.InvoiceApi_HostAddress}}/api/v2/demo/tax-calculations
+X-API-Key: {{SplitPayment.InvoiceApi_Key}}
+Content-Type: application/json
+
+{
+  "taxBase": 1000.00,
+  "referenceDate": "2026-10-28"
+}
 
 ###
