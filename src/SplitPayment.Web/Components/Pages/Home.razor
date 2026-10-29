@@ -1,0 +1,286 @@
+﻿@page "/"
+@inject DemoCheckoutApi CheckoutApi
+@inject NavigationManager Navigation
+@implements IDisposable
+
+<PageTitle>SplitPay | Checkout de demonstração</PageTitle>
+
+<div class="storefront">
+    <header class="topbar">
+        <a class="brand" href="/" aria-label="SplitPay, início">
+            <span class="brand-mark" aria-hidden="true">S</span>
+            <span>split<span class="brand-light">pay</span></span>
+        </a>
+        <div class="topbar-meta">
+            <span class="sandbox-badge"><span class="status-dot"></span> AMBIENTE DE TESTE</span>
+            <span class="secure-label"><span aria-hidden="true">⌑</span> Checkout protegido</span>
+        </div>
+    </header>
+
+    <main class="checkout-layout">
+        <section class="checkout-main" aria-labelledby="page-title">
+            <div class="eyebrow"><span>01</span> COMPRA DEMONSTRATIVA</div>
+            <h1 id="page-title">Simples de comprar.<br /><span>Fácil de acompanhar.</span></h1>
+            <p class="intro">Escolha um produto e continue para @(_testProfiles.Count > 0 ? "o simulador local de pagamento." : "o ambiente seguro de pagamento de teste.")</p>
+
+            <div class="checkout-steps" aria-label="Etapas da compra">
+                <div class="step is-active"><span>1</span><strong>Produto</strong></div>
+                <span class="step-line"></span>
+                <div class="step"><span>2</span><strong>Pagamento</strong></div>
+                <span class="step-line"></span>
+                <div class="step"><span>3</span><strong>Comprovante</strong></div>
+            </div>
+
+            <div class="section-heading">
+                <div>
+                    <span class="section-kicker">CATÁLOGO DE TESTE</span>
+                    <h2>Escolha seu produto</h2>
+                </div>
+                <span class="item-count">@(_products.Count) item</span>
+            </div>
+
+            @if (_testProfiles.Count > 0)
+            {
+                <div class="local-mock-banner">
+                    <strong>Simulação local ativa</strong>
+                    <span>Este fluxo não chama o Mercado Pago e não movimenta dinheiro.</span>
+                </div>
+                <label class="profile-picker">
+                    <span>Perfil fictício de comprador</span>
+                    <select @bind="_selectedTestProfileId" disabled="@_isCreating">
+                        @foreach (var profile in _testProfiles)
+                        {
+                            <option value="@profile.Id">@profile.DisplayName — @profile.Email</option>
+                        }
+                    </select>
+                </label>
+            }
+
+            @if (_isLoading)
+            {
+                <div class="loading-card" role="status">Carregando catálogo de demonstração…</div>
+            }
+            else if (_error is not null)
+            {
+                <div class="alert alert-error" role="alert">
+                    <strong>Não foi possível carregar a loja</strong>
+                    <span>@_error</span>
+                    <button class="text-button" @onclick="LoadProductsAsync">Tentar novamente</button>
+                </div>
+            }
+            else if (_products.Count == 0)
+            {
+                <div class="loading-card">Nenhum produto de demonstração está disponível.</div>
+            }
+            else
+            {
+                <div class="product-list">
+                    @foreach (var product in _products)
+                    {
+                        <article class="product-card" @key="product.Id">
+                            <div class="product-art" aria-hidden="true">
+                                <span class="product-art-shape"></span>
+                                <span class="product-art-label">SP</span>
+                            </div>
+                            <div class="product-info">
+                                <span class="product-tag">DEMONSTRAÇÃO</span>
+                                <h3>@product.Name</h3>
+                                <p>@product.Description</p>
+                                <strong class="product-price">@FormatCurrency(product.UnitPrice)</strong>
+                            </div>
+                            <div class="quantity-control" aria-label="Quantidade">
+                                <button type="button" aria-label="Diminuir quantidade" disabled="@(_quantity <= 1 || _isCreating)" @onclick="DecreaseQuantity">−</button>
+                                <output aria-live="polite">@_quantity</output>
+                                <button type="button" aria-label="Aumentar quantidade" disabled="@(_quantity >= 10 || _isCreating)" @onclick="IncreaseQuantity">+</button>
+                            </div>
+                        </article>
+                    }
+                </div>
+            }
+
+            @if (_checkoutError is not null)
+            {
+                <div class="alert alert-error checkout-alert" role="alert">@_checkoutError</div>
+            }
+
+            <div class="demo-note">
+                <span class="note-icon" aria-hidden="true">i</span>
+                <p><strong>Somente demonstração.</strong> Nenhuma cobrança real será feita. @(_testProfiles.Count > 0 ? "O resultado será escolhido no simulador local." : "O pagamento seguirá para o ambiente sandbox configurado.")</p>
+            </div>
+        </section>
+
+        <aside class="order-panel" aria-label="Resumo do pedido">
+            <div class="order-panel-header">
+                <div>
+                    <span class="section-kicker">SEU PEDIDO</span>
+                    <h2>Resumo</h2>
+                </div>
+                <span class="order-icon" aria-hidden="true">▤</span>
+            </div>
+
+            @if (_products.FirstOrDefault() is { } selectedProduct)
+            {
+                <div class="order-line">
+                    <div class="mini-product" aria-hidden="true">SP</div>
+                    <div class="order-product">
+                        <strong>@selectedProduct.Name</strong>
+                        <span>Quantidade: @_quantity</span>
+                    </div>
+                    <strong class="line-total">@FormatCurrency(selectedProduct.UnitPrice * _quantity)</strong>
+                </div>
+                <div class="order-divider"></div>
+                <div class="total-row"><span>Subtotal</span><span>@FormatCurrency(selectedProduct.UnitPrice * _quantity)</span></div>
+                <div class="total-row"><span>Entrega</span><span class="free-label">Grátis</span></div>
+                <div class="order-divider total-divider"></div>
+                <div class="grand-total"><span>Total</span><strong>@FormatCurrency(selectedProduct.UnitPrice * _quantity)</strong></div>
+
+                <button class="primary-button" type="button" disabled="@(_isLoading || _isCreating || _products.Count == 0)" @onclick="CreateCheckoutAsync">
+                    @if (_isCreating)
+                    {
+                        <span class="button-spinner" aria-hidden="true"></span>
+                        <span>Preparando checkout…</span>
+                    }
+                    else
+                    {
+                        <span>Continuar para pagamento</span>
+                        <span aria-hidden="true">→</span>
+                    }
+                </button>
+            }
+            else
+            {
+                <div class="empty-order">O resumo do pedido aparecerá aqui.</div>
+            }
+
+            <div class="payment-methods">
+                <span class="section-kicker">FORMAS DE PAGAMENTO</span>
+                <div class="method-list">
+                    <span class="method-chip"><span class="pix-symbol">⌘</span> Pix</span>
+                    <span class="method-chip"><span class="card-symbol" aria-hidden="true"></span> Crédito</span>
+                    <span class="method-chip"><span class="card-symbol" aria-hidden="true"></span> Débito</span>
+                </div>
+                <p>@(_testProfiles.Count > 0 ? "Os resultados serão simulados localmente; nenhum método real será processado." : "As opções disponíveis podem variar conforme a conta de teste do provedor.")</p>
+            </div>
+
+            <div class="security-note">
+                <span class="lock-symbol" aria-hidden="true">⌑</span>
+                <span>Os dados de pagamento são inseridos diretamente no Mercado Pago. Não armazenamos dados do cartão.</span>
+            </div>
+        </aside>
+    </main>
+
+    <footer class="site-footer">
+        <span>© 2026 SplitPay · Projeto demonstrativo</span>
+        <span>Pagamentos simulados · Sem valor fiscal</span>
+    </footer>
+</div>
+
+@code {
+    private readonly CancellationTokenSource _lifetime = new();
+    private IReadOnlyList<DemoProduct> _products = [];
+    private IReadOnlyList<DemoTestProfile> _testProfiles = [];
+    private string? _selectedTestProfileId;
+    private string _idempotencyKey = Guid.NewGuid().ToString("N");
+    private int _quantity = 1;
+    private bool _isLoading = true;
+    private bool _isCreating;
+    private string? _error;
+    private string? _checkoutError;
+
+    protected override Task OnInitializedAsync() => LoadProductsAsync();
+
+    private async Task LoadProductsAsync()
+    {
+        _isLoading = true;
+        _error = null;
+        try
+        {
+            _products = await CheckoutApi.GetProductsAsync(_lifetime.Token);
+            _testProfiles = await CheckoutApi.GetTestProfilesAsync(_lifetime.Token);
+            _selectedTestProfileId = _testProfiles.FirstOrDefault()?.Id;
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Não foi possível conectar à API. Verifique se o serviço está disponível e tente novamente.";
+        }
+        catch (Exception exception) when (exception is DemoCheckoutApiException or InvalidDataException)
+        {
+            _error = exception.Message;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private void DecreaseQuantity()
+    {
+        if (_quantity > 1)
+        {
+            _quantity--;
+            _idempotencyKey = Guid.NewGuid().ToString("N");
+        }
+    }
+
+    private void IncreaseQuantity()
+    {
+        if (_quantity < 10)
+        {
+            _quantity++;
+            _idempotencyKey = Guid.NewGuid().ToString("N");
+        }
+    }
+
+    private async Task CreateCheckoutAsync()
+    {
+        if (_isCreating || _products.Count == 0)
+        {
+            return;
+        }
+
+        _isCreating = true;
+        _checkoutError = null;
+        try
+        {
+            var checkout = await CheckoutApi.CreateCheckoutAsync(
+                _products[0].Id,
+                _quantity,
+                _selectedTestProfileId,
+                _idempotencyKey,
+                _lifetime.Token);
+            if (checkout.IsMockPayment)
+            {
+                Navigation.NavigateTo(checkout.MockCheckoutUrl!);
+            }
+            else
+            {
+                Navigation.NavigateTo(checkout.SandboxCheckoutUrl!, forceLoad: true);
+            }
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+        }
+        catch (HttpRequestException)
+        {
+            _checkoutError = "Não foi possível conectar à API. Verifique se o serviço está disponível e tente novamente.";
+            _isCreating = false;
+        }
+        catch (Exception exception) when (exception is DemoCheckoutApiException or InvalidDataException)
+        {
+            _checkoutError = exception.Message;
+            _isCreating = false;
+        }
+    }
+
+    private static string FormatCurrency(decimal value) =>
+        value.ToString("C2", System.Globalization.CultureInfo.GetCultureInfo("pt-BR"));
+
+    public void Dispose()
+    {
+        _lifetime.Cancel();
+        _lifetime.Dispose();
+    }
+}

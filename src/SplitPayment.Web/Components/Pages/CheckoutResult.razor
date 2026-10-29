@@ -1,0 +1,210 @@
+@page "/checkout/result/{CheckoutId:guid}"
+@implements IDisposable
+@inject DemoCheckoutApi CheckoutApi
+@inject NavigationManager Navigation
+
+<PageTitle>SplitPay | Status do pagamento</PageTitle>
+
+<div class="result-page">
+    <header class="topbar">
+        <a class="brand" href="/" aria-label="SplitPay, início">
+            <span class="brand-mark" aria-hidden="true">S</span>
+            <span>split<span class="brand-light">pay</span></span>
+        </a>
+        <span class="sandbox-badge"><span class="status-dot"></span> @(_checkout?.IsMockPayment == true ? "MOCK LOCAL" : "AMBIENTE DE TESTE")</span>
+    </header>
+
+    <main class="result-card">
+        @if (_isLoading && _checkout is null)
+        {
+            <div class="result-icon result-icon-pending" aria-hidden="true"><span class="button-spinner"></span></div>
+            <span class="section-kicker">@(_checkout?.IsMockPayment == true ? "CONSULTANDO SIMULADOR LOCAL" : "CONSULTANDO PROVEDOR")</span>
+            <h1>Verificando seu pagamento</h1>
+            <p class="result-copy">Estamos buscando o status atualizado no ambiente de teste.</p>
+        }
+        else if (_error is not null)
+        {
+            <div class="result-icon result-icon-error" aria-hidden="true">!</div>
+            <span class="section-kicker">NÃO FOI POSSÍVEL CONSULTAR</span>
+            <h1>Status temporariamente indisponível</h1>
+            <p class="result-copy">@_error</p>
+            <button class="primary-button result-action" type="button" @onclick="RefreshStatusAsync">Tentar novamente <span aria-hidden="true">↻</span></button>
+        }
+        else if (_checkout is not null)
+        {
+            <div class="@StatusIconClass" aria-hidden="true">@StatusIcon</div>
+            <span class="section-kicker">COMPRA DE DEMONSTRAÇÃO</span>
+            <h1>@StatusTitle</h1>
+            <p class="result-copy">@StatusMessage</p>
+
+            <div class="receipt-summary">
+                <div class="receipt-row"><span>Produto</span><strong>@_checkout.ProductName</strong></div>
+                @if (_checkout.TestProfileName is not null)
+                {
+                    <div class="receipt-row"><span>Comprador fictício</span><strong>@_checkout.TestProfileName</strong></div>
+                }
+                <div class="receipt-row"><span>Quantidade</span><strong>@_checkout.Quantity</strong></div>
+                <div class="receipt-row"><span>Referência</span><strong class="reference-id">@_checkout.CheckoutId</strong></div>
+                <div class="receipt-divider"></div>
+                <div class="receipt-row receipt-total"><span>Valor do pedido</span><strong>@FormatCurrency(_checkout.TotalAmount)</strong></div>
+                <div class="receipt-row"><span>Status informado</span><strong class="provider-status">@_checkout.Status</strong></div>
+            </div>
+
+            @if (_checkout.Status is "Created" or "pending" or "in_process" or "ProviderOutcomeUnknown")
+            {
+                <button class="secondary-button result-action" type="button" disabled="@_isRefreshing" @onclick="RefreshStatusAsync">
+                    @(_isRefreshing ? "Atualizando…" : "Atualizar status")
+                    <span aria-hidden="true">↻</span>
+                </button>
+            }
+
+            <div class="demo-note result-note">
+                <span class="note-icon" aria-hidden="true">i</span>
+                <p><strong>Comprovante demonstrativo.</strong> Não é nota fiscal nem confirmação de pagamento real. @(_checkout.IsMockPayment ? "O status foi escolhido no simulador local; nenhum provedor foi chamado." : "O status depende da confirmação do provedor sandbox.")</p>
+            </div>
+        }
+
+        <button class="back-link" type="button" @onclick="NavigateHome">← Voltar à loja</button>
+    </main>
+
+    <footer class="site-footer result-footer">
+        <span>SplitPay · @(_checkout?.IsMockPayment == true ? "Simulador local" : "Ambiente sandbox")</span>
+        <span>Sem cobrança real · Sem valor fiscal</span>
+    </footer>
+</div>
+
+@code {
+    [Parameter]
+    public Guid CheckoutId { get; set; }
+
+    [SupplyParameterFromQuery(Name = "result")]
+    public string? ProviderReturnResult { get; set; }
+
+    private void NavigateHome() => Navigation.NavigateTo("/");
+
+    private readonly CancellationTokenSource _lifetime = new();
+    private DemoCheckoutStatus? _checkout;
+    private bool _isLoading = true;
+    private bool _isRefreshing;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshStatusAsync();
+        if (_checkout?.Status is "Created" or "pending" or "in_process" or "ProviderOutcomeUnknown")
+        {
+            _ = PollStatusAsync(_lifetime.Token);
+        }
+    }
+
+    private async Task RefreshStatusAsync()
+    {
+        _isRefreshing = true;
+        _error = null;
+        try
+        {
+            _checkout = await CheckoutApi.GetCheckoutStatusAsync(CheckoutId, _lifetime.Token);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Não foi possível conectar à API. Verifique se o serviço está disponível e tente novamente.";
+        }
+        catch (Exception exception) when (exception is DemoCheckoutApiException or InvalidDataException)
+        {
+            _error = exception.Message;
+        }
+        finally
+        {
+            _isLoading = false;
+            _isRefreshing = false;
+        }
+    }
+
+    private async Task PollStatusAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+        for (var attempt = 0; attempt < 12 && !cancellationToken.IsCancellationRequested; attempt++)
+        {
+            try
+            {
+                if (!await timer.WaitForNextTickAsync(cancellationToken))
+                {
+                    return;
+                }
+
+                await InvokeAsync(async () =>
+                {
+                    await RefreshStatusAsync();
+                    StateHasChanged();
+                });
+
+                if (_checkout?.Status is not ("Created" or "pending" or "in_process" or "ProviderOutcomeUnknown"))
+                {
+                    return;
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+        }
+    }
+
+    private string StatusTitle => _checkout?.Status switch
+    {
+        "approved" => "Pagamento aprovado",
+        "pending" or "in_process" => "Pagamento em análise",
+        "rejected" => "Pagamento não aprovado",
+        "cancelled" => "Pagamento cancelado",
+        "refunded" => "Pagamento estornado",
+        "charged_back" => "Pagamento contestado",
+        "ProviderOutcomeUnknown" => "Aguardando confirmação",
+        _ => "Checkout criado"
+    };
+
+    private string StatusMessage => _checkout?.IsMockPayment == true
+        ? _checkout.Status switch
+        {
+            "approved" => "O simulador local registrou o resultado fictício como aprovado.",
+            "pending" => "O simulador manteve o pagamento fictício pendente.",
+            "rejected" => "O simulador local registrou o resultado fictício como recusado.",
+            _ => "Este é um resultado fictício sem movimentação financeira."
+        }
+        : _checkout?.Status switch
+        {
+            "approved" => "O provedor confirmou este pagamento no ambiente de teste.",
+            "pending" or "in_process" => "A confirmação ainda está pendente. Esta página atualizará o status automaticamente.",
+            "rejected" => "O provedor informou que o pagamento de teste não foi aprovado.",
+            "cancelled" => "O fluxo de pagamento foi cancelado.",
+            "refunded" => "O provedor informou um estorno no ambiente de teste.",
+            "charged_back" => "O provedor informou uma contestação de teste.",
+            "ProviderOutcomeUnknown" => "Não foi possível confirmar o resultado da criação do checkout. Consulte o provedor antes de tentar novamente.",
+            _ => "Aguarde a confirmação do pagamento pelo provedor sandbox. A criação do checkout não confirma pagamento."
+        };
+
+    private string StatusIconClass => _checkout?.Status switch
+    {
+        "approved" => "result-icon result-icon-success",
+        "rejected" or "cancelled" or "refunded" or "charged_back" => "result-icon result-icon-error",
+        _ => "result-icon result-icon-pending"
+    };
+
+    private string StatusIcon => _checkout?.Status switch
+    {
+        "approved" => "✓",
+        "rejected" or "cancelled" or "refunded" or "charged_back" => "!",
+        _ => "…"
+    };
+
+    private static string FormatCurrency(decimal value) =>
+        value.ToString("C2", System.Globalization.CultureInfo.GetCultureInfo("pt-BR"));
+
+    public void Dispose()
+    {
+        _lifetime.Cancel();
+        _lifetime.Dispose();
+    }
+}

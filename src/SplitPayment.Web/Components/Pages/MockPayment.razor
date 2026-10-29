@@ -1,0 +1,165 @@
+@page "/checkout/mock/{CheckoutId:guid}"
+@inject DemoCheckoutApi CheckoutApi
+@inject NavigationManager Navigation
+
+<PageTitle>SplitPay | Pagamento simulado</PageTitle>
+
+<div class="result-page">
+    <header class="topbar">
+        <a class="brand" href="/" aria-label="SplitPay, início">
+            <span class="brand-mark" aria-hidden="true">S</span>
+            <span>split<span class="brand-light">pay</span></span>
+        </a>
+        <span class="sandbox-badge"><span class="status-dot"></span> MOCK LOCAL — SEM COBRANÇA</span>
+    </header>
+
+    <main class="result-card">
+        @if (_isLoading)
+        {
+            <div class="result-icon result-icon-pending" aria-hidden="true"><span class="button-spinner"></span></div>
+            <span class="section-kicker">SIMULADOR LOCAL</span>
+            <h1>Preparando o pagamento fictício</h1>
+        }
+        else if (_error is not null)
+        {
+            <div class="result-icon result-icon-error" aria-hidden="true">!</div>
+            <span class="section-kicker">SIMULAÇÃO INDISPONÍVEL</span>
+            <h1>Não foi possível carregar o checkout</h1>
+            <p class="result-copy">@_error</p>
+        }
+        else if (_checkout is not null)
+        {
+            <div class="result-icon result-icon-pending" aria-hidden="true">…</div>
+            <span class="section-kicker">PAGAMENTO FICTÍCIO</span>
+            <h1>Escolha um resultado</h1>
+            <p class="result-copy">Nenhum provedor será chamado. Use as opções abaixo para testar os estados do checkout.</p>
+
+            <div class="receipt-summary">
+                <div class="receipt-row"><span>Produto</span><strong>@_checkout.ProductName</strong></div>
+                <div class="receipt-row"><span>Comprador fictício</span><strong>@_checkout.TestProfileName</strong></div>
+                <div class="receipt-row"><span>Quantidade</span><strong>@_checkout.Quantity</strong></div>
+                <div class="receipt-divider"></div>
+                <div class="receipt-row receipt-total"><span>Total demonstrativo</span><strong>@FormatCurrency(_checkout.TotalAmount)</strong></div>
+            </div>
+
+            @if (_checkout.IsMockPayment && _checkout.Status == "pending")
+            {
+                <div class="mock-payment-actions">
+                    <button class="primary-button" type="button" disabled="@_isSubmitting" @onclick="ApproveAsync">
+                        Simular aprovação
+                    </button>
+                    <button class="secondary-button" type="button" disabled="@_isSubmitting" @onclick="RejectAsync">
+                        Simular recusa
+                    </button>
+                    <button class="secondary-button" type="button" disabled="@_isSubmitting" @onclick="KeepPendingAsync">
+                        Manter pendente
+                    </button>
+                </div>
+            }
+            else
+            {
+                <p class="result-copy">Este checkout não está aguardando uma decisão do simulador local.</p>
+                <button class="primary-button result-action" type="button" @onclick="NavigateToReceipt">Ver comprovante demonstrativo</button>
+            }
+
+            @if (_actionError is not null)
+            {
+                <div class="alert alert-error checkout-alert" role="alert">@_actionError</div>
+            }
+
+            <div class="demo-note result-note">
+                <span class="note-icon" aria-hidden="true">i</span>
+                <p><strong>Simulação offline.</strong> Este resultado é fictício, não representa pagamento, liquidação financeira ou documento fiscal.</p>
+            </div>
+        }
+
+        <button class="back-link" type="button" @onclick="NavigateHome">← Voltar à loja</button>
+    </main>
+
+    <footer class="site-footer result-footer">
+        <span>SplitPay · Simulador local</span>
+        <span>Nenhuma chamada ao Mercado Pago</span>
+    </footer>
+</div>
+
+@code {
+    [Parameter]
+    public Guid CheckoutId { get; set; }
+
+    private DemoCheckoutStatus? _checkout;
+    private bool _isLoading = true;
+    private bool _isSubmitting;
+    private string? _error;
+    private string? _actionError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _checkout = await CheckoutApi.GetCheckoutStatusAsync(CheckoutId, CancellationToken.None);
+            if (!_checkout.IsMockPayment)
+            {
+                _error = "Este endereço não corresponde a um checkout mock local.";
+                _checkout = null;
+            }
+        }
+        catch (HttpRequestException)
+        {
+            _error = "Não foi possível conectar à API local.";
+        }
+        catch (Exception exception) when (exception is DemoCheckoutApiException or InvalidDataException)
+        {
+            _error = exception.Message;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task CompleteAsync(string status)
+    {
+        if (_isSubmitting || _checkout is null)
+        {
+            return;
+        }
+
+        _isSubmitting = true;
+        _actionError = null;
+        try
+        {
+            await CheckoutApi.CompleteMockPaymentAsync(CheckoutId, status, CancellationToken.None);
+            _checkout = await CheckoutApi.GetCheckoutStatusAsync(CheckoutId, CancellationToken.None);
+            if (_checkout.Status != "pending")
+            {
+                NavigateToReceipt();
+            }
+        }
+        catch (HttpRequestException)
+        {
+            _actionError = "Não foi possível conectar à API local. Tente novamente.";
+        }
+        catch (Exception exception) when (exception is DemoCheckoutApiException or InvalidDataException)
+        {
+            _actionError = exception.Message;
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+
+    private Task ApproveAsync() => CompleteAsync("approved");
+
+    private Task RejectAsync() => CompleteAsync("rejected");
+
+    private Task KeepPendingAsync() => CompleteAsync("pending");
+
+    private void NavigateToReceipt() =>
+        Navigation.NavigateTo($"/checkout/result/{CheckoutId:D}?result=mock");
+
+    private void NavigateHome() => Navigation.NavigateTo("/");
+
+    private static string FormatCurrency(decimal value) =>
+        value.ToString("C2", System.Globalization.CultureInfo.GetCultureInfo("pt-BR"));
+}

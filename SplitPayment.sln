@@ -17,6 +17,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SplitPayment.EngineWorker",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SplitPayment.CgibsGateway", "src\SplitPayment.CgibsGateway\SplitPayment.CgibsGateway.csproj", "{7593A526-3ABD-4A1A-B0BA-1B7CC5E25873}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SplitPayment.Web", "src\SplitPayment.Web\SplitPayment.Web.csproj", "{9ED1E762-7E18-4F77-AEF8-BCB7C0E5B619}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -87,6 +89,18 @@ Global
 		{7593A526-3ABD-4A1A-B0BA-1B7CC5E25873}.Release|x64.Build.0 = Release|Any CPU
 		{7593A526-3ABD-4A1A-B0BA-1B7CC5E25873}.Release|x86.ActiveCfg = Release|Any CPU
 		{7593A526-3ABD-4A1A-B0BA-1B7CC5E25873}.Release|x86.Build.0 = Release|Any CPU
+		{9ED1E762-7E18-4F77-AEF8-BCB7C0E5B619}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9ED1E762-7E18-4F77-AEF8-BCB7C0E5B619}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9ED1E762-7E18-4F77-AEF8-BCB7C0E5B619}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{9ED1E762-7E18-4F77-AEF8-BCB7C0E5B619}.Debug|x64.Build.0 = Debug|Any CPU
+		{9ED1E762-7E18-4F77-AEF8-BCB7C0E5B619}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{9ED1E762-7E18-4F77-AEF8-BCB7C0E5B619}.Debug|x86.Build.0 = Debug|Any CPU
+		{9ED1E762-7E18-4F77-AEF8-BCB7C0E5B619}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9ED1E762-7E18-4F77-AEF8-BCB7C0E5B619}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9ED1E762-7E18-4F77-AEF8-BCB7C0E5B619}.Release|x64.ActiveCfg = Release|Any CPU
+		{9ED1E762-7E18-4F77-AEF8-BCB7C0E5B619}.Release|x64.Build.0 = Release|Any CPU
+		{9ED1E762-7E18-4F77-AEF8-BCB7C0E5B619}.Release|x86.ActiveCfg = Release|Any CPU
+		{9ED1E762-7E18-4F77-AEF8-BCB7C0E5B619}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -97,5 +111,6 @@ Global
 		{5A1051D8-28F8-4611-803D-52D1458F7F1D} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{2B83E225-F6FC-41C8-91AD-7C6B6A025F2C} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{7593A526-3ABD-4A1A-B0BA-1B7CC5E25873} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{9ED1E762-7E18-4F77-AEF8-BCB7C0E5B619} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal
