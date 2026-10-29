@@ -4,6 +4,8 @@
 
 Plataforma demonstrativa com storefront Blazor, API .NET, Kafka, MongoDB e SQL Server. Inclui processamento assíncrono de invoices, checkout local totalmente simulado e integração hospedada Mercado Pago restrita a credenciais de teste.
 
+> **Evolução do projeto.** Esta plataforma é a base do **[SplitPay POS](https://github.com/VniiD/SplitPay-POS)**, um simulador de maquininha de pagamento brasileira (Pix, débito, crédito parcelado, VA/VR) construído sobre este mesmo pipeline (outbox → Kafka → Engine → ledger), com recibo, split por venda e gestor financeiro. Este repositório documenta a fundação; o POS mostra o que foi construído em cima dela.
+
 **Autor:** [VniiD](https://github.com/VniiD)
 **Licença:** [GNU GPL-3.0-only](LICENSE)
 
